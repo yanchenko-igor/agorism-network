@@ -1,40 +1,33 @@
+// main.go
 package main
 
 import (
 	"agorism-network/blockchain"
-	"agorism-network/p2p"
 	"fmt"
-	//"time"
+	//"log"
+	"sync"
 )
 
 func main() {
-	bc := blockchain.Blockchain{}
-	bc.NewGenesisBlock()
 
-	go p2p.Listen(8080, &bc)
-	peers := []string{"127.0.0.1:8081"}
-	p2p.ConnectToPeers(peers, &bc)
-	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
 
+	newBlockChannel := make(chan *blockchain.Block)
+
+	bc := blockchain.NewBlockchain()
+	// Launch two goroutines
 	go func() {
-		for {
-			block := bc.FindBlock("Send 1 BTC to Alice")
-			bc.AddBlock(block)
-			p2p.SendBlock(block)
-			//fmt.Println("Alice found a valid block: %+v", block)
-			//fmt.Println("Blockchain: %+v", bc)
-			for _, block := range bc.Blocks() {
-				//fmt.Printf("%v\n", block)
-				fmt.Printf("Prev. hash: %x\n", block.PrevBlockHash)
-				fmt.Printf("Data: %s\n", block.Data)
-				fmt.Printf("Hash: %x\n", block.Hash)
-				fmt.Printf("Nonce: %x\n", block.Nonce)
-				fmt.Println()
-			}
-			fmt.Print("===================================\n")
-		}
+		defer wg.Done()
+		blockchain.HandleNewBlocks(bc, newBlockChannel)
+	}()
+	// Start mining for new blocks in a goroutine
+	go func() {
+		defer wg.Done()
+		blockchain.MineBlock(bc, newBlockChannel)
 	}()
 
-	// Wait for the application to be interrupted.
-	<-done
+	// Wait for the goroutines to finish
+	wg.Wait()
+	fmt.Println("All goroutines completed")
 }

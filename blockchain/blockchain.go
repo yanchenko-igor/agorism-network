@@ -1,42 +1,76 @@
+// blockchain/blockchain.go
+
 package blockchain
 
 import (
-	"crypto/sha256"
-	//"encoding/hex"
-	"fmt"
-	"strconv"
-	//"strings"
 	"bytes"
-	// "database/sql"
-	// "encoding/json"
-	// _ "github.com/mattn/go-sqlite3"
-	"math"
+	"crypto/sha256"
 	"math/big"
-	// "net/http"
+	"math/rand"
 	"time"
+	//"strconv"
+	//"log"
+	"fmt"
 )
 
-const targetBits = 24
+const (
+	initialDifficulty = 3
+)
+
+// ProofOfWork represents a proof-of-work
+type ProofOfWork struct {
+	block  *Block
+	target *big.Int
+}
 
 // Block represents a block in the blockchain
 type Block struct {
-	Timestamp     int64
-	Data          []byte
-	PrevBlockHash []byte
-	Hash          []byte
-	Nonce         int
-	Difficulty    int
+	Timestamp     int64  // Timestamp of when the block was created
+	Data          []byte // Data stored in the block
+	PrevBlockHash []byte // Hash of the previous block
+	Hash          []byte // Hash of the block
+	Nonce         int    // Nonce used to create the proof of work
+	Difficulty    int    // Difficulty of the proof of work
 }
 
-// Blockchain represents a chain of blocks
 type Blockchain struct {
-	Blocks []*Block
+	Blocks        []*Block
+	updateChannel chan struct{}
 }
 
-// NewBlock creates a new block and adds it to the chain
-func (bc *Blockchain) FindBlock(data string) *Block {
-	prevBlock := bc.Blocks[len(bc.Blocks)-1]
-	block := &Block{time.Now().Unix(), []byte(data), prevBlock.Hash, []byte{}, 0, 5}
+func NewBlockchain() *Blockchain {
+	return &Blockchain{[]*Block{NewGenesisBlock()}, make(chan struct{})}
+}
+
+func (bc *Blockchain) Difficulty() int {
+	latestBlock := bc.GetLatestBlock()
+	if latestBlock == nil {
+		return initialDifficulty
+	}
+	return latestBlock.Difficulty
+}
+
+func NewBlock(prevBlockHash []byte) *Block {
+	block := &Block{time.Now().Unix(), []byte{}, prevBlockHash, []byte{}, 0, 0}
+	block.BuildBlockData()
+	block.Hash = block.CalculateHash()
+	block.Difficulty = CalculateDifficulty()
+	return block
+}
+
+func (b *Block) BuildBlockData() {
+	// TODO: Implement function to build block data
+	b.Data = []byte("Empty block")
+}
+
+func CalculateDifficulty() int {
+	// TODO: Implement function to calculate difficulty
+	return initialDifficulty
+}
+
+// NewBlock creates a new block and calculates its hash
+func NewBlockOld(data string, prevBlockHash []byte, difficulty int) *Block {
+	block := &Block{time.Now().Unix(), []byte(data), prevBlockHash, []byte{}, 0, difficulty}
 	pow := NewProofOfWork(block)
 	nonce, hash := pow.Run()
 
@@ -46,28 +80,7 @@ func (bc *Blockchain) FindBlock(data string) *Block {
 	return block
 }
 
-// AddBlock adds a new block to the chain.
-func (bc *Blockchain) AddBlock(block *Block) error {
-	// Check if the block can be added to the current chain.
-	if !bc.IsValidBlock(block) {
-		return fmt.Errorf("cannot add block to chain")
-	}
-	bc.Blocks = append(bc.Blocks, block)
-	return nil
-}
-
-func (bc *Blockchain) IsValidBlock(block *Block) bool {
-	pow := NewProofOfWork(block)
-	return pow.Validate()
-}
-
-// ProofOfWork represents a proof of work
-type ProofOfWork struct {
-	block  *Block
-	target *big.Int
-}
-
-// NewProofOfWork creates a new proof of work
+// NewProofOfWork creates a new proof-of-work
 func NewProofOfWork(b *Block) *ProofOfWork {
 	target := big.NewInt(1)
 	target.Lsh(target, uint(256-b.Difficulty))
@@ -77,34 +90,17 @@ func NewProofOfWork(b *Block) *ProofOfWork {
 	return pow
 }
 
-func (pow *ProofOfWork) prepareData(nonce int) []byte {
-	data := bytes.Join(
-		[][]byte{
-			pow.block.PrevBlockHash,
-			pow.block.Data,
-			IntToHex(pow.block.Timestamp),
-			IntToHex(int64(pow.block.Difficulty)),
-			IntToHex(int64(nonce)),
-		},
-		[]byte{},
-	)
-
-	return data
-}
-
-// Run performs a proof of work
+// Run performs a proof-of-work
 func (pow *ProofOfWork) Run() (int, []byte) {
 	var hashInt big.Int
 	var hash [32]byte
 	nonce := 0
+	maxNonce := int(^uint32(0))
+	rand.Seed(time.Now().UnixNano())
 
-	//fmt.Printf("Mining the block containing \"%s\"\n", pow.block.Data)
-	for nonce < math.MaxInt64 {
-		//TODO remove next line, it's here to create a delay without loading the CPU
-		time.Sleep(100 * time.Millisecond)
+	for nonce < maxNonce {
 		data := pow.prepareData(nonce)
 		hash = sha256.Sum256(data)
-		//fmt.Printf("\r%x", hash)
 		hashInt.SetBytes(hash[:])
 
 		if hashInt.Cmp(pow.target) == -1 {
@@ -113,12 +109,11 @@ func (pow *ProofOfWork) Run() (int, []byte) {
 			nonce++
 		}
 	}
-	//fmt.Print("\n\n")
 
 	return nonce, hash[:]
 }
 
-// Validate validates a proof of work
+// Validate validates a proof-of-work
 func (pow *ProofOfWork) Validate() bool {
 	var hashInt big.Int
 
@@ -126,135 +121,109 @@ func (pow *ProofOfWork) Validate() bool {
 	hash := sha256.Sum256(data)
 	hashInt.SetBytes(hash[:])
 
-	isValid := hashInt.Cmp(pow.target) == -1
-
-	return isValid
+	return hashInt.Cmp(pow.target) == -1
 }
 
-// NewGenesisBlock creates the first block in the chain
-func (bc *Blockchain) NewGenesisBlock() *Block {
-	genesisBlock := &Block{time.Now().Unix(), []byte("Genesis Block"), []byte{}, []byte{}, 0, 10}
-	genesisBlock.setHash()
-	bc.Blocks = append(bc.Blocks, genesisBlock)
-	return genesisBlock
+func (pow *ProofOfWork) prepareData(nonce int) []byte {
+	return bytes.Join([][]byte{
+		pow.block.PrevBlockHash,
+		pow.block.Data,
+		intToHex(pow.block.Timestamp),
+		intToHex(int64(nonce)),
+		intToHex(int64(pow.block.Difficulty)),
+	}, []byte{})
 }
 
-func (b *Block) setHash() {
-	timestamp := []byte(strconv.FormatInt(b.Timestamp, 10))
-	headers := bytes.Join([][]byte{b.PrevBlockHash, b.Data, timestamp}, []byte{})
-	hash := sha256.Sum256(headers)
-	b.Hash = hash[:]
+func (bc *Blockchain) GetLatestBlock() *Block {
+	return bc.Blocks[len(bc.Blocks)-1]
 }
 
-// targetTime is the target time in seconds for finding the previous n blocks
-func adjustDifficulty(lastBlocks []*Block, targetTime int) int {
-	newDifficulty := lastBlocks[len(lastBlocks)-1].Difficulty
+func MineBlock(blockchain *Blockchain, newBlockChannel chan *Block) {
+	for {
+		latestBlock := blockchain.GetLatestBlock()
+		newBlock := NewBlock(latestBlock.Hash)
+		newBlock.BuildBlockData()
+		newBlock.Difficulty = CalculateDifficulty()
+		select {
+		case <-blockchain.updateChannel:
+			continue
+		default:
+		}
+		// Keep mining until the proof of work is valid
+		for !newBlock.HasValidProofOfWork() {
+			newBlock.Nonce++
+			newBlock.Hash = newBlock.CalculateHash()
+		}
 
-	// Calculate the time it took to find the previous n blocks
-	elapsedTime := lastBlocks[len(lastBlocks)-1].Timestamp - lastBlocks[0].Timestamp
+		// Send the new block to the channel
+		newBlockChannel <- newBlock
+	}
+}
 
-	if elapsedTime < int64(targetTime)/2 {
-		newDifficulty++
-	} else if elapsedTime > int64(targetTime)*2 {
-		newDifficulty--
+func isBlockValid(newBlock, latestBlock *Block) bool {
+	// Check if the new block's previous hash value is the same as the latest block's hash value
+	if bytes.Compare(newBlock.PrevBlockHash, latestBlock.Hash) != 0 {
+		return false
 	}
 
-	return newDifficulty
+	// Check if the new block's hash value is valid
+	if !isHashValid(newBlock.Hash, newBlock.Difficulty) {
+		return false
+	}
+
+	// If both checks pass, the block is valid
+	return true
 }
 
-func IntToHex(num int64) []byte {
-	return []byte(strconv.FormatInt(num, 16))
+func NewGenesisBlock() *Block {
+	return NewBlockOld("Genesis block", []byte{}, initialDifficulty)
 }
 
-func (b *Block) calcHash(nonce int) []byte {
-	timestamp := []byte(strconv.FormatInt(b.Timestamp, 10))
-	nonceStr := []byte(strconv.FormatInt(int64(nonce), 10))
-	headers := bytes.Join([][]byte{b.PrevBlockHash, b.Data, timestamp, nonceStr}, []byte{})
-	hash := sha256.Sum256(headers)
+func (bc *Blockchain) AddBlock(block *Block) error {
+	latestBlock := bc.GetLatestBlock()
+	if !bytes.Equal(block.PrevBlockHash, latestBlock.Hash) {
+		return fmt.Errorf("invalid block")
+	}
+	if !block.HasValidProofOfWork() {
+		return fmt.Errorf("invalid proof of work")
+	}
+	bc.Blocks = append(bc.Blocks, block)
+	// send update to the update channel
+	bc.updateChannel <- struct{}{}
+	return nil
+}
+
+func (b *Block) HasValidProofOfWork() bool {
+	return isHashValid(b.Hash, b.Difficulty)
+}
+
+func (b *Block) CalculateHash() []byte {
+	data := []byte(fmt.Sprintf("%d%x%x%d%d", b.Timestamp, b.PrevBlockHash, b.Data, b.Nonce, b.Difficulty))
+	hash := sha256.Sum256(data)
 	return hash[:]
 }
 
-//
-// type CreateBlockRequest struct {
-// 	Data string `json:"data"`
-// }
-//
-// type CreateBlockResponse struct {
-// 	Message string `json:"message"`
-// }
-//
-// func wrapper(bc *Blockchain) http.HandlerFunc {
-// 	return func(w http.ResponseWriter, r *http.Request) {
-// 		var request CreateBlockRequest
-// 		err := json.NewDecoder(r.Body).Decode(&request)
-// 		if err != nil {
-// 			http.Error(w, err.Error(), http.StatusBadRequest)
-// 			return
-// 		}
-// 		fmt.Printf("%+v", bc)
-// 		bc.NewBlock(request.Data)
-// 		response := CreateBlockResponse{Message: "Block created successfully"}
-// 		json.NewEncoder(w).Encode(response)
-// 	}
-// }
-//
-// func (bc *Blockchain) Load() error {
-// 	db, err := sql.Open("sqlite3", "./blockchain.db")
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer db.Close()
-//
-// 	rows, err := db.Query("SELECT data, prev_block_hash, hash, nonce FROM blocks")
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer rows.Close()
-//
-// 	var blocks []*Block
-// 	for rows.Next() {
-// 		var data []byte
-// 		var prevBlockHash []byte
-// 		var hash []byte
-// 		var nonce int
-// 		if err := rows.Scan(&data, &prevBlockHash, &hash, &nonce); err != nil {
-// 			return err
-// 		}
-//
-// 		block := &Block{Data: data, PrevBlockHash: prevBlockHash, Hash: hash, Nonce: nonce}
-// 		// if err := bc.ValidateBlock(block, prevBlockHash); err != nil {
-// 		// 	return err
-// 		// }
-// 		blocks = append(blocks, block)
-// 	}
-// 	if err := rows.Err(); err != nil {
-// 		return err
-// 	}
-//
-// 	bc.blocks = blocks
-// 	return nil
-// }
+func HandleNewBlocks(bc *Blockchain, newBlockChannel chan *Block) {
+	for {
+		select {
+		case newBlock := <-newBlockChannel:
+			//fmt.Printf("%x", newBlock)
+			if err := bc.AddBlock(newBlock); err != nil {
+				fmt.Printf("Error: %+v\n", err)
+			} else {
+				fmt.Printf("Prev. hash: %x\n", newBlock.PrevBlockHash)
+				fmt.Printf("Data: %s\n", newBlock.Data)
+				fmt.Printf("Hash: %x\n", newBlock.Hash)
+				fmt.Printf("Nonce: %x\n", newBlock.Nonce)
+			}
+			//bc.AddBlock(newBlock)
 
-var bc *Blockchain
-
-// func main() {
-// 	bc := Blockchain{}
-// 	bc.NewGenesisBlock()
-// 	bc.NewBlock("Send 1 BTC to Alice")
-// 	bc.NewBlock("Send 2 more BTC to Alice")
-// 	bc.NewBlock("Send 5 more BTC to Alice")
-// 	bc.NewBlock("Send 2 BTC to Bob")
-// 	bc.NewBlock("Send 4 more BTC to Alice")
-//
-// 	for _, block := range bc.blocks {
-// 		//fmt.Printf("%v\n", block)
-// 		fmt.Printf("Prev. hash: %x\n", block.PrevBlockHash)
-// 		fmt.Printf("Data: %s\n", block.Data)
-// 		fmt.Printf("Hash: %x\n", block.Hash)
-// 		fmt.Printf("Nonce: %x\n", block.Nonce)
-// 		fmt.Println()
-// 	}
-// 	fmt.Printf("%+v", bc)
-// 	http.HandleFunc("/createBlock", wrapper(&bc))
-// 	http.ListenAndServe(":8080", nil)
-// }
+			// TODO: Validate the new block
+			// TODO: Check if the new block has a valid proof of work
+			// TODO: Check if the new block's previous hash matches the latest block in the blockchain
+			// TODO: If all checks pass, add the new block to the blockchain
+			// TODO: Send the new block to all other peers in the network
+		default:
+		}
+	}
+}
